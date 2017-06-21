@@ -7,7 +7,8 @@
 #include "gpio.h"  
 #include <stdbool.h>
 #include <sys/time.h> // gettimeofday   
-//include <string.h> 
+#include <string.h> // fsprintf
+#include <time.h> // localtime
 
 //  valves
 #define pin_spi_cs1   P9_16 // 1_19=51
@@ -23,22 +24,29 @@
 #define pin_dout1_sensor  P9_14 // 1_18=50 
 #define pin_dout2_sensor  P9_15 // 1_16=48 
 //#define pin_dout3_sensor  P9_26 // 0_14=14 
-#define pin_dout3_sensor  P9_23 // s-mori compsition 
+//#define pin_dout3_sensor  P9_23 // s-mori compsition 
 #define NUM_ADC_PORT 8
 #define NUM_ADC 2
 
-#define MICRO_TO_SEC 0.00000.1
+#define MICRO_TO_SEC 0.000001
 
 #define EXHAUST 0.0
 
 #define LINE_NUM 10000
-#define VALVE_NUM 2
+#define STR_NUM 4096
 
 #define DELIMITER ","
+#define FILENAME_FORMAT "data/%04d%02d%02d/%02d%02d%02d.dat"
+
+#define INIT_TIME 3.0
+#define INIT_PRESSURE 0.05
+#define FORWARD 0
+#define BACK 1
+#define VALVE_NUM 2
 
 struct timeval ini_t, now_t;
 
-unsigned ling sensor_data[LINE_NUM][NUM_ADC][NUM_ADC_PORT];
+unsigned long sensor_data[LINE_NUM][NUM_ADC][NUM_ADC_PORT];
 double valve_data[LINE_NUM][VALVE_NUM];
 double time_data[LINE_NUM];
 
@@ -118,10 +126,11 @@ void set_CS_SENSOR(bool value) { digitalWrite(pin_cs_sensor, value); }
 int get_DOUT_SENSOR(int adc_num) { 
   if(adc_num==0){
     digitalRead(pin_dout1_sensor); 
-  }else if(adc_num==1){
-    digitalRead(pin_dout2_sensor); 
+    //}else if(adc_num==1){
+    //digitalRead(pin_dout2_sensor); 
   }else{
-    digitalRead(pin_dout3_sensor); 
+    digitalRead(pin_dout2_sensor); 
+    //digitalRead(pin_dout3_sensor); 
   }
 }
 
@@ -239,8 +248,7 @@ void exhaustAll(){
 
 double getTime(void){
   gettimeofday( &now_t, NULL );
-  double now_time = + 1.0*( now_t.tv_sec - ini_t.tv_sec ) 
-    + MICRO_TO_SEC*( now_t.tv_usec - ini_t.tv_usec );
+  double now_time = + 1.0*( now_t.tv_sec - ini_t.tv_sec ) + MICRO_TO_SEC*( now_t.tv_usec - ini_t.tv_usec );
   return now_time;
 }
 
@@ -259,8 +267,8 @@ void getSensors( unsigned int n, double p0, double p1 ){
   }
   //printf("\n");
   // valves
-  valve_data[n][0] = p0;
-  valve_data[n][1] = p1;
+  valve_data[n][FORWARD] = p0;
+  valve_data[n][BACK]    = p1;
   // time
   time_data[n] = getTime();
 }
@@ -269,53 +277,68 @@ void takeInitialState(void){
   setState( FORWARD, EXHAUST ); 
   setState( BACK, INIT_PRESSURE );
   gettimeofday( &ini_t, NULL );
-  while( getTime() < INITIAL_TIME ){};
-  setState( FORWARD, INIT_PRESSURE );
+  while( getTime() < INIT_TIME ){};
   setState( BACK, EXHAUST );
 }
 
+void printMiddleData(int n){
+  int b, p;
+  printf("[middle] %08.3lf: ", time_data[n] ); 
+  for ( b = 0; b<NUM_ADC; b++ )
+    for ( p = 0; p<NUM_ADC_PORT; p++ )
+      printf( "%04d%s", sensor_data[n][b][p], DELIMITER ); 
+  printf("\n"); 
+}
+
 int swing( double half_time, double pressure ){
-  int n;
+  int n = 0;
+  int m;
   gettimeofday( &ini_t, NULL );
-  for ( n = 0; n < LINE_NUM; n++ ){
-    if ( getTime() > half_time + hald_time )
+  // 1st
+  setState( FORWARD, pressure );
+  setState( BACK, EXHAUST );
+  while(1){
+    if ( getTime() > half_time )
       break;
+    getSensors( n, pressure, EXHAUST );
+    n++;
   }
-
-
-  getSensors( n, pressure, EXHAUST );
-
-
-  getSensors( n, EXHAUST, pressure );
-
+  m = n;
+  // 2nd
+  setState( FORWARD, EXHAUST );
+  setState( BACK, pressure );
+  while(1){
+    if ( getTime() > half_time + half_time )
+      break;
+    getSensors( n, EXHAUST, pressure );
+    n++;
+  }
+  // print middle state
+  printMiddleData(m);
   return n;
 }
 
-void saveBBBData(int end_step) {
+void saveResults(int end_step) {
   FILE *fp;
-  char results_file[STR_SIZE];
-  char str[STR_SIZE];
-  char tmp_char[STR_SIZE];
-  unsigned int n, b, p, c, s;
+  char results_file[STR_NUM];
+  char str[STR_NUM];
+  char tmp_char[STR_NUM];
+  unsigned int n, b, p, v;
   time_t timer;
   struct tm *local;
   struct tm *utc;
-
   // generate file name
   timer = time(NULL);
   local = localtime(&timer);
-  
   int year   = local->tm_year + 1900;
   int month  = local->tm_mon + 1;
   int day    = local->tm_mday;
   int hour   = local->tm_hour;
   int minute = local->tm_min;
   int second = local->tm_sec;
-  
   sprintf( results_file, FILENAME_FORMAT, year, month, day, hour, minute, second );
-
   // open file
-  fp = fopen( result_file, "w");
+  fp = fopen( results_file, "w");
   if (fp == NULL){
     printf( "File open error: %s\n", results_file );
     return;
@@ -327,8 +350,7 @@ void saveBBBData(int end_step) {
     // sensor
     for ( b = 0; b<NUM_ADC; b++ ) {
       for ( p = 0; p<NUM_ADC_PORT; p++ ) {
-	s = NUM_ADC_PORT*b + p;
-	sprintf( tmp_char, "%lu%s", sensor_data[n][s], DELIMITER ); 
+	sprintf( tmp_char, "%lu%s", sensor_data[n][b][p], DELIMITER ); 
 	strcat( str, tmp_char );      
       }
     }
@@ -348,8 +370,8 @@ void saveBBBData(int end_step) {
 }
 
 int main( int argc, char *argv[] ){
-  if ( argc != 2 ){
-    printf("input: ./evaluateSwing half_time [s] presure [MPa]\n");
+  if ( argc != 3 ){
+    printf("input: ./evaluateSwing half_time [s] pressure [MPa]\n");
     return -1;
   }
   double half_time = atof( argv[1] );
@@ -364,122 +386,8 @@ int main( int argc, char *argv[] ){
   takeInitialState();
 
   int n = swing( half_time, pressure );
+  saveResults(n);
 
-  /*
-  double now_time = getTime();
-  int now_phase = -1;
-  unsigned int init_time;
-  exhaustAll();
-  */
-
-  /*
-  //int p, c;
-  int old_phase = -1, now_phase = -1;
-  double now_time;
-  int n;
-  // loop
-  //while (1){
-  setServer( welcomeSocket );
-  phase_num = setCommands( newSocket );
-
-
-    // check commands
-    int p,c,now_phase;
-    printf("commands:\n");
-    for (p=0; p<phase_num; p++){
-      printf("%d %d ", p, switch_time[p] );
-      for(c=0; c<NUM_OF_CHANNELS; c++){
-      printf("%f ", valve_command[p][c] );
-      }
-      printf("\n");
-    }
-    printf("\n\n");
-
-  
-  //struct timeval ini_t;
-  //struct timeval now_t;
-  
-  //gettimeofday( &ini_t, NULL );    
-  ini_t = rt_timer_read();
-  while(1){
-    now_time  = getTime();
-    now_phase = getPhase( now_time, phase_num );
-    
-    if( now_phase >= phase_num - 1 ){
-      send( newSocket, END_SIGNAL, NUM_BUFFER, 0 );
-      break;
-    }
-
-    if ( now_phase > old_phase )
-      sendCommands( now_phase );
-
-    getSensors( num_adc );
-    sendSensors( newSocket, num_adc, now_phase );    
-    //printf( "phase:%d, time:%f\n", now_phase, now_time );
-    
-    old_phase = now_phase;
-    usleep(50000);
-  }
-  
-  //sleep(1);
-  //}
-  */
-  /*
-  unsigned long *tmp_val0;
-  unsigned long tmp_val[NUM_ADC_PORT];
-  char char_val[12];
-  char *char_top, *char_command;
-  double Pressure;
-  int j, k;
-  //struct timeval ini, now;
-  //double elasped = 0;
-  //gettimeofday( &ini, NULL );  
-
-  strcpy( buffer, "ready" );
-  send( newSocket, buffer, 5, 0 );
-  while (1){
-    // send sensor value
-    strcpy( buffer, "sensor: " );
-    for ( j = 0; j< num_adc; j++){
-      tmp_val0 = read_sensor(j,tmp_val);
-      for ( k = 0; k< NUM_ADC_PORT; k++){
-      //printf("%d\t", tmp_val0[k]);
-      sprintf( char_val, "%d ", tmp_val0[k] );
-      strcat( buffer, char_val );
-      }
-    }
-    //send( newSocket, buffer, 128, 0);
-    send( newSocket, buffer, NUM_BUFFER, 0);
-    //printf("\n");
-    //printf( "%s\n", buffer );
-  
-    // recieve command value
-    recv( newSocket, buffer, NUM_BUFFER, 0);
-    //printf( "%s\n", buffer );
-    if ( strlen( buffer ) != 0 ){
-      char_top = strtok( buffer, " " );
-      if ( strcmp( char_top, "command:" ) == 0 ){
-      for (ch_num = 0; ch_num< NUM_OF_CHANNELS; ch_num++){
-        //if ( strlen( buffer ) == 0 )
-	  //break;
-	    char_command = strtok( NULL, " " );
-	      Pressure = atof( char_command );
-	        setState( ch_num, Pressure ); 
-		  printf( "%4.3f ", Pressure );
-		  }
-		  printf( "\n" );
-		  //printf( "%s\n", buffer );
-		  //break;
-      }
-    }
-    //gettimeofday( &now, NULL );  
-    //elasped = now.tv_sec - ini.tv_sec;
-    //if ( elasped > 1 )
-    //break;
-  }
-
-  //exhaustAll();
-  */
   return 0;
 }
 
