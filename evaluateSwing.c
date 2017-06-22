@@ -29,6 +29,7 @@
 #define NUM_ADC 2
 
 #define MICRO_TO_SEC 0.000001
+#define MS_TO_SEC 0.001
 
 #define EXHAUST 0.0
 
@@ -39,6 +40,7 @@
 #define FILENAME_FORMAT "data/%04d%02d%02d/%02d%02d%02d.dat"
 
 #define INIT_TIME 3.0
+#define EXHAUST_TIME 0.5
 #define INIT_PRESSURE 0.05
 #define FORWARD 0
 #define BACK 1
@@ -279,6 +281,7 @@ void takeInitialState(void){
   gettimeofday( &ini_t, NULL );
   while( getTime() < INIT_TIME ){};
   setState( BACK, EXHAUST );
+  while( getTime() < EXHAUST_TIME ){};
 }
 
 void printMiddleData(int n){
@@ -370,24 +373,28 @@ void saveResults(int end_step) {
 }
 
 int main( int argc, char *argv[] ){
+  // get parameters
   if ( argc != 3 ){
-    printf("input: ./evaluateSwing half_time [s] pressure [MPa]\n");
+    printf("input: ./evaluateSwing pressure [MPa] half_time [ms] \n");
     return -1;
   }
-  double half_time = atof( argv[1] );
-  double pressure  = atof( argv[2] );
+  double pressure  = atof( argv[1] ); 
+  double half_time = atof( argv[2] ) * MS_TO_SEC;
 
+  // initialize
   init();
   init_pins(); // ALL 5 pins are HIGH except for GND
   init_DAConvAD5328();
   init_sensor();  
   exhaustAll();
-
+  // initial posture
   takeInitialState();
-
+  // swing
   int n = swing( half_time, pressure );
+  // unitialize
+  exhaustAll();
+  // save data
   saveResults(n);
-
   return 0;
 }
 
