@@ -45,6 +45,7 @@
 #define FORWARD 0
 #define BACK 1
 #define VALVE_NUM 2
+#define K_STOP 1.5
 
 struct timeval ini_t, now_t;
 
@@ -293,26 +294,22 @@ void printMiddleData(int n){
   printf("\n"); 
 }
 
-int swing( double half_time, double pressure ){
+int swing( double time0, double time1, double pressure ){
   int n = 0;
   int m;
   gettimeofday( &ini_t, NULL );
   // 1st
   setState( FORWARD, pressure );
   setState( BACK, EXHAUST );
-  while(1){
-    if ( getTime() > half_time )
-      break;
+  while(getTime() < time0 ){
     getSensors( n, pressure, EXHAUST );
     n++;
   }
   m = n;
   // 2nd
   setState( FORWARD, EXHAUST );
-  setState( BACK, pressure );
-  while(1){
-    if ( getTime() > half_time + half_time )
-      break;
+  setState( BACK, K_STOP * pressure );
+  while( getTime() < time0 + time1 ){
     getSensors( n, EXHAUST, pressure );
     n++;
   }
@@ -374,12 +371,13 @@ void saveResults(int end_step) {
 
 int main( int argc, char *argv[] ){
   // get parameters
-  if ( argc != 3 ){
-    printf("input: ./evaluateSwing pressure [MPa] half_time [ms] \n");
+  if ( argc != 4 ){
+    printf("input: ./evaluateSwing pressure0, pressure1 [MPa] half time [ms] \n");
     return -1;
   }
-  double pressure  = atof( argv[1] ); 
-  double half_time = atof( argv[2] ) * MS_TO_SEC;
+  double pressure = atof( argv[1] ); 
+  double time0    = atof( argv[2] ) * MS_TO_SEC;
+  double time1    = atof( argv[3] ) * MS_TO_SEC;
 
   // initialize
   init();
@@ -390,7 +388,7 @@ int main( int argc, char *argv[] ){
   // initial posture
   takeInitialState();
   // swing
-  int n = swing( half_time, pressure );
+  int n = swing( time0, time1, pressure );
   // unitialize
   exhaustAll();
   // save data
